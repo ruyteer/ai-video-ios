@@ -1,7 +1,11 @@
 import Photos
 
-enum PhotoLibrarySaveError: Error {
+enum PhotoLibrarySaveError: LocalizedError {
     case notAuthorized
+
+    var errorDescription: String? {
+        "Sem permissão pra salvar na galeria. Ative em Ajustes > ViralClip > Fotos."
+    }
 }
 
 enum PhotoLibrarySaver {

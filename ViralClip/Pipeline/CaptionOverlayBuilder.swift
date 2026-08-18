@@ -3,8 +3,12 @@ import QuartzCore
 import UIKit
 import EditorCore
 
-enum CaptionOverlayError: Error {
+enum CaptionOverlayError: LocalizedError {
     case noVideoTrack
+
+    var errorDescription: String? {
+        "O vídeo não tem trilha de vídeo pra legendar."
+    }
 }
 
 /// Monta a `AVVideoComposition` que queima a legenda no vídeo via Core

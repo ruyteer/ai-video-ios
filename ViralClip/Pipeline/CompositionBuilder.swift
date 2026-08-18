@@ -1,9 +1,18 @@
 import AVFoundation
 import EditorCore
 
-enum CompositionBuildError: Error {
+enum CompositionBuildError: LocalizedError {
     case emptyKeepRanges
     case noVideoTrack
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyKeepRanges:
+            return "Não sobrou nada pra manter depois do corte de silêncio."
+        case .noVideoTrack:
+            return "O vídeo não tem trilha de vídeo."
+        }
+    }
 }
 
 /// Monta o corte como lista de edição (`AVMutableComposition`), não como

@@ -1,9 +1,20 @@
 import AVFoundation
 
-enum VideoExportError: Error {
+enum VideoExportError: LocalizedError {
     case sessionCreationFailed
     case cancelled
     case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sessionCreationFailed:
+            return "Não foi possível preparar o export."
+        case .cancelled:
+            return "Export cancelado."
+        case .failed(let reason):
+            return "Falha ao exportar o vídeo: \(reason)"
+        }
+    }
 }
 
 enum VideoExporter {

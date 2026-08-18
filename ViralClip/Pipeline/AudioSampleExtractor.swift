@@ -1,8 +1,17 @@
 import AVFoundation
 
-enum AudioSampleExtractionError: Error {
+enum AudioSampleExtractionError: LocalizedError {
     case noAudioTrack
     case readerFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noAudioTrack:
+            return "O vídeo não tem trilha de áudio pra analisar."
+        case .readerFailed(let reason):
+            return "Falha ao ler o áudio do vídeo: \(reason)"
+        }
+    }
 }
 
 /// Única parte do pipeline que toca em `AVAsset` pra extrair áudio — o

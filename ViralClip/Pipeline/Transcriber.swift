@@ -1,10 +1,21 @@
 import Speech
 import EditorCore
 
-enum TranscriptionError: Error {
+enum TranscriptionError: LocalizedError {
     case notAuthorized
     case recognizerUnavailable
     case failed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthorized:
+            return "Permissão de reconhecimento de fala negada. Ative em Ajustes > Privacidade e Segurança > Reconhecimento de Fala > ViralClip."
+        case .recognizerUnavailable:
+            return "Reconhecimento de fala em português não está disponível neste aparelho agora."
+        case .failed(let reason):
+            return "Falha na transcrição: \(reason)"
+        }
+    }
 }
 
 enum Transcriber {

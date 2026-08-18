@@ -44,9 +44,17 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # Necessário pra salvar o vídeo cortado de volta na galeria
         # (PHPhotoLibrary, ver ViralClip/Pipeline/PhotoLibrarySaver.swift).
-        # PhotosPicker (leitura, na seleção do vídeo original) não precisa de
-        # permissão própria — só a escrita de volta precisa.
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Pra salvar o vídeo cortado de volta na sua galeria."
+        # Acesso de LEITURA à biblioteca inteira (PHPhotoLibrary .readWrite,
+        # ver ViralClip/Pipeline/PhotoAssetLoader.swift) — troca deliberada
+        # em relação ao PhotosPicker padrão (que não pede permissão nenhuma,
+        # mas sempre copia o arquivo inteiro antes de liberar qualquer
+        # acesso). Com essa permissão, o vídeo é lido direto via
+        # PHImageManager sem essa cópia forçada, que é a diferença real de
+        # velocidade em vídeo grande. Custo: pede acesso à galeria inteira,
+        # não só ao selecionado — aceitável pro escopo do projeto (uso
+        # pessoal, só no aparelho do usuário, ver CLAUDE.md seção 0).
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Pra abrir o vídeo escolhido rápido, sem copiar o arquivo inteiro primeiro."
         # Necessário pra transcrever o áudio do vídeo já cortado
         # (SFSpeechRecognizer, ver ViralClip/Pipeline/Transcriber.swift) e
         # gerar a legenda. Usa SFSpeechURLRecognitionRequest (arquivo, não

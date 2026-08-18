@@ -1,18 +1,17 @@
 import SwiftUI
-import PhotosUI
 import AVFoundation
-import UniformTypeIdentifiers
+import Photos
 import EditorCore
 
 private enum PipelineState {
     case idle
     case loadingInfo(progress: Double)
-    case ready(asset: AVURLAsset, info: String)
+    case ready(asset: AVAsset, info: String)
     case processing(step: String)
     /// Corte pronto e já exportado (sem legenda ainda) — `cutFileURL` é o
     /// arquivo intermediário no tmp, só existe até o usuário decidir salvar
     /// com ou sem legenda (ver `skipCaptionsAndSave`/`applyCaptions`).
-    case cutReady(cutAsset: AVURLAsset, cutFileURL: URL)
+    case cutReady(cutAsset: AVAsset, cutFileURL: URL)
     case done(message: String)
     case failed(String)
 }
@@ -22,29 +21,35 @@ private enum PipelineState {
 // corte (SFSpeechRecognizer, pt-BR) → escolher estilo/posição da legenda →
 // queimar via Core Animation → exportar final → salvar na galeria.
 struct ContentView: View {
-    @State private var selectedItem: PhotosPickerItem?
+    @State private var showingPicker = false
     @State private var state: PipelineState = .idle
-    // Precisa viver fora do enum de estado porque a observação KVO do
-    // Progress atualiza esta referência de fora do fluxo normal de SwiftUI —
-    // guardar só o valor (Double) no enum e a observação aqui evita recriar
-    // o NSKeyValueObservation a cada re-render.
-    @State private var loadProgressObservation: NSKeyValueObservation?
     @State private var captionRevealStyle: CaptionRevealStyle = .wordByWord
     @State private var captionPosition: CaptionPosition = .centerLower
+    // Erro específico da etapa de legenda: fica separado de `state` de
+    // propósito. Se um erro aqui derrubasse `state` pra `.failed`, o corte
+    // já pronto em `cutFileURL` ficaria inacessível e o usuário teria que
+    // repetir a análise de áudio + export inteiros de novo só pra tentar a
+    // legenda outra vez — em vez disso, o estado continua `.cutReady` e só
+    // mostramos o erro ao lado do seletor de estilo, pra tentar de novo (ou
+    // usar "Salvar sem legenda") sem perder o trabalho já feito.
+    @State private var captionErrorMessage: String?
 
     var body: some View {
         VStack(spacing: 20) {
             Text("ViralClip")
                 .font(.largeTitle.bold())
 
-            PhotosPicker(
-                selection: $selectedItem,
-                matching: .videos,
-                photoLibrary: .shared()
-            ) {
+            Button {
+                Task { await requestAccessAndShowPicker() }
+            } label: {
                 Label("Escolher vídeo", systemImage: "video.badge.plus")
             }
             .buttonStyle(.borderedProminent)
+            .sheet(isPresented: $showingPicker) {
+                PhotoLibraryPicker(isPresented: $showingPicker) { phAsset in
+                    Task { await loadVideoInfo(from: phAsset) }
+                }
+            }
 
             statusView
 
@@ -58,6 +63,11 @@ struct ContentView: View {
             }
 
             if case .cutReady(let cutAsset, let cutFileURL) = state {
+                if let captionErrorMessage {
+                    Label(captionErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
                 CaptionStylePickerView(
                     revealStyle: $captionRevealStyle,
                     position: $captionPosition,
@@ -69,13 +79,19 @@ struct ContentView: View {
                 )
             }
 
+            if case .failed = state {
+                Button("Recomeçar", action: reset)
+                    .buttonStyle(.bordered)
+            }
+
             Spacer()
         }
         .padding()
-        .onChange(of: selectedItem) { _, newItem in
-            guard let newItem else { return }
-            Task { await loadVideoInfo(from: newItem) }
-        }
+    }
+
+    private func reset() {
+        captionErrorMessage = nil
+        state = .idle
     }
 
     @ViewBuilder
@@ -106,34 +122,28 @@ struct ContentView: View {
         }
     }
 
-    private func loadVideoInfo(from item: PhotosPickerItem) async {
+    private func requestAccessAndShowPicker() async {
+        // Precisa ter a permissão ANTES de abrir o picker: o coordinator do
+        // PhotoLibraryPicker busca o PHAsset pelo identificador assim que o
+        // usuário escolhe um vídeo, e essa busca só enxerga a biblioteca de
+        // verdade se o app já estiver autorizado — pedir depois seria
+        // tarde demais pra essa busca específica.
+        do {
+            try await PhotoAssetLoader.requestAuthorization()
+            showingPicker = true
+        } catch {
+            state = .failed(error.localizedDescription)
+        }
+    }
+
+    private func loadVideoInfo(from phAsset: PHAsset) async {
         state = .loadingInfo(progress: 0)
 
         do {
-            // A variante com completionHandler (em vez do `loadTransferable`
-            // async simples) é a única que devolve um `Progress` observável —
-            // cobre tanto o download do iCloud (quando o original não está
-            // no aparelho) quanto a cópia local, que é o que causava a
-            // sensação de "travado" sem indicação nenhuma antes disso.
-            let movie: Movie? = try await withCheckedThrowingContinuation { continuation in
-                let progress = item.loadTransferable(type: Movie.self) { result in
-                    continuation.resume(with: result)
-                }
-                loadProgressObservation = progress.observe(\.fractionCompleted, options: [.new]) { progress, _ in
-                    let fraction = progress.fractionCompleted
-                    Task { @MainActor in
-                        state = .loadingInfo(progress: fraction)
-                    }
-                }
-            }
-            loadProgressObservation = nil
-
-            guard let movie else {
-                state = .failed("Não foi possível carregar o vídeo selecionado.")
-                return
+            let asset = try await PhotoAssetLoader.loadAVAsset(for: phAsset) { fraction in
+                state = .loadingInfo(progress: fraction)
             }
 
-            let asset = AVURLAsset(url: movie.url)
             let duration = try await asset.load(.duration)
             let seconds = CMTimeGetSeconds(duration)
 
@@ -158,12 +168,11 @@ struct ContentView: View {
             )
             state = .ready(asset: asset, info: info)
         } catch {
-            loadProgressObservation = nil
             state = .failed("Erro ao ler o vídeo: \(error.localizedDescription)")
         }
     }
 
-    private func cutSilenceAndExport(asset: AVURLAsset) async {
+    private func cutSilenceAndExport(asset: AVAsset) async {
         do {
             state = .processing(step: "Analisando áudio...")
             let (samples, sampleRate) = try await AudioSampleExtractor.extractMonoPCM(from: asset)
@@ -193,17 +202,23 @@ struct ContentView: View {
     }
 
     private func skipCaptionsAndSave(cutFileURL: URL) async {
+        captionErrorMessage = nil
         do {
             state = .processing(step: "Salvando na galeria...")
             try await PhotoLibrarySaver.saveVideo(at: cutFileURL)
             try? FileManager.default.removeItem(at: cutFileURL)
             state = .done(message: "Corte exportado e salvo na galeria, sem legenda.")
         } catch {
-            state = .failed("Erro ao salvar: \(error.localizedDescription)")
+            // Volta pro cutReady em vez de .failed: o corte continua no
+            // mesmo cutFileURL, então dá pra tentar salvar de novo (ou
+            // aplicar legenda) sem refazer o corte inteiro.
+            captionErrorMessage = error.localizedDescription
+            state = .cutReady(cutAsset: AVURLAsset(url: cutFileURL), cutFileURL: cutFileURL)
         }
     }
 
-    private func applyCaptions(cutAsset: AVURLAsset, cutFileURL: URL, settings: CaptionSettings) async {
+    private func applyCaptions(cutAsset: AVAsset, cutFileURL: URL, settings: CaptionSettings) async {
+        captionErrorMessage = nil
         do {
             state = .processing(step: "Transcrevendo áudio...")
             let words = try await Transcriber.transcribe(url: cutFileURL)
@@ -233,34 +248,11 @@ struct ContentView: View {
 
             state = .done(message: "Exportado com legenda e salvo na galeria (\(cues.count) trecho\(cues.count == 1 ? "" : "s")).")
         } catch {
-            state = .failed("Erro ao aplicar legenda: \(error.localizedDescription)")
-        }
-    }
-}
-
-// PhotosPicker entrega o vídeo como dado transferível, não como URL direta —
-// a URL original do picker some assim que a closure de importação termina,
-// então precisamos de uma URL estável que sobreviva o resto da função (e,
-// mais tarde, o processamento do corte). `moveItem` em vez de `copyItem`:
-// `received.file` já está numa área temporária que o sistema descarta
-// depois da closure, então "tirar" o arquivo de lá com um move (troca de
-// referência, sem reler/reescrever bytes — quase instantâneo dentro do
-// mesmo volume, que é o caso normal aqui) é estritamente melhor que copiar
-// e deixar o original ser descartado depois. Pra vídeo grande isso é a
-// diferença entre a etapa de carregar ser proporcional ao tamanho do
-// arquivo (copyItem) ou quase fixa (moveItem).
-private struct Movie: Transferable {
-    let url: URL
-
-    static var transferRepresentation: some TransferRepresentation {
-        FileRepresentation(contentType: .movie) { movie in
-            SentTransferredFile(movie.url)
-        } importing: { received in
-            let destination = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension(received.file.pathExtension)
-            try FileManager.default.moveItem(at: received.file, to: destination)
-            return Movie(url: destination)
+            // Mesmo raciocínio do skipCaptionsAndSave: volta pro cutReady
+            // (cutFileURL continua válido) em vez de matar o corte já
+            // pronto por causa de um erro só na etapa de legenda.
+            captionErrorMessage = error.localizedDescription
+            state = .cutReady(cutAsset: cutAsset, cutFileURL: cutFileURL)
         }
     }
 }
