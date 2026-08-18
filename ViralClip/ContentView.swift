@@ -175,8 +175,15 @@ struct ContentView: View {
 
 // PhotosPicker entrega o vídeo como dado transferível, não como URL direta —
 // a URL original do picker some assim que a closure de importação termina,
-// então copiamos pro diretório temporário do app pra ter uma URL estável
-// que sobrevive o resto da função (e, mais tarde, o processamento do corte).
+// então precisamos de uma URL estável que sobreviva o resto da função (e,
+// mais tarde, o processamento do corte). `moveItem` em vez de `copyItem`:
+// `received.file` já está numa área temporária que o sistema descarta
+// depois da closure, então "tirar" o arquivo de lá com um move (troca de
+// referência, sem reler/reescrever bytes — quase instantâneo dentro do
+// mesmo volume, que é o caso normal aqui) é estritamente melhor que copiar
+// e deixar o original ser descartado depois. Pra vídeo grande isso é a
+// diferença entre a etapa de carregar ser proporcional ao tamanho do
+// arquivo (copyItem) ou quase fixa (moveItem).
 private struct Movie: Transferable {
     let url: URL
 
@@ -187,7 +194,7 @@ private struct Movie: Transferable {
             let destination = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension(received.file.pathExtension)
-            try FileManager.default.copyItem(at: received.file, to: destination)
+            try FileManager.default.moveItem(at: received.file, to: destination)
             return Movie(url: destination)
         }
     }
