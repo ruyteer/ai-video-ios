@@ -221,8 +221,11 @@ struct ContentView: View {
         captionErrorMessage = nil
         do {
             state = .processing(step: "Transcrevendo áudio...")
-            let words = try await Transcriber.transcribe(url: cutFileURL)
-            let cues = CaptionCueBuilder.cues(from: words, settings: settings)
+            let transcription = try await Transcriber.transcribe(url: cutFileURL)
+            let cues = CaptionCueBuilder.cues(from: transcription.words, settings: settings)
+            let serverNotice = transcription.wasOnDevice
+                ? ""
+                : " (transcrito via servidor da Apple — reconhecimento local indisponível neste aparelho agora)"
 
             guard !cues.isEmpty else {
                 state = .processing(step: "Salvando na galeria...")
@@ -246,7 +249,7 @@ struct ContentView: View {
             try? FileManager.default.removeItem(at: finalURL)
             try? FileManager.default.removeItem(at: cutFileURL)
 
-            state = .done(message: "Exportado com legenda e salvo na galeria (\(cues.count) trecho\(cues.count == 1 ? "" : "s")).")
+            state = .done(message: "Exportado com legenda e salvo na galeria (\(cues.count) trecho\(cues.count == 1 ? "" : "s"))\(serverNotice).")
         } catch {
             // Mesmo raciocínio do skipCaptionsAndSave: volta pro cutReady
             // (cutFileURL continua válido) em vez de matar o corte já
