@@ -140,7 +140,7 @@ struct ContentView: View {
             try? FileManager.default.removeItem(at: outputURL)
 
             let cutCount = keepRanges.count - 1
-            state = .done("Exportado e salvo na galeria (\(cutCount) corte\(cutCount == 1 ? "" : "s") de silêncio).")
+            state = .done(message: "Exportado e salvo na galeria (\(cutCount) corte\(cutCount == 1 ? "" : "s") de silêncio).")
         } catch {
             state = .failed("Erro ao processar: \(error.localizedDescription)")
         }
