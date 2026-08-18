@@ -89,11 +89,21 @@ enum CaptionOverlayBuilder {
         textLayer.isWrapped = true
         textLayer.truncationMode = .none
         textLayer.foregroundColor = UIColor.white.cgColor
-        textLayer.contentsScale = 3
-        textLayer.shadowColor = UIColor.black.cgColor
-        textLayer.shadowOpacity = 0.85
-        textLayer.shadowRadius = 4
-        textLayer.shadowOffset = .zero
+        // `renderSize` aqui já é em pixels absolutos do vídeo, não em
+        // "pontos" de tela — não existe retina nesse contexto de export
+        // offline. `contentsScale` > 1 só faria cada camada de texto
+        // guardar um bitmap maior (3 → 9x a área) sem ganho nenhum de
+        // nitidez; num vídeo com muitos trechos de legenda isso foi a
+        // causa mais provável de um jetsam kill por memória observado num
+        // teste real (~3,4GB de RAM, processo morto por "per-process-limit").
+        textLayer.contentsScale = 1
+        // Sombra removida: CALayer.shadow* força uma passada extra de
+        // renderização offscreen por camada, outro multiplicador de custo
+        // nessa mesma combinação (AVVideoCompositionCoreAnimationTool é
+        // conhecido por ser pesado em memória). Sem ela o texto branco
+        // pode ficar menos legível sobre fundo claro — se isso for um
+        // problema real depois de testar, a alternativa mais barata é uma
+        // caixa de fundo semi-transparente atrás do texto em vez de sombra.
 
         let width = renderSize.width * 0.85
         let height = renderSize.height * 0.18
