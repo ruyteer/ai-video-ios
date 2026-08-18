@@ -191,6 +191,15 @@ public enum SilenceDetection {
         }
 
         let rms = (sumOfSquares / Double(window.count)).squareRoot()
-        return 20 * log10(max(rms, rmsFloor))
+        // `max(rms, rmsFloor)` NÃO basta se `rms` for NaN (ex: um sample
+        // corrompido vindo do AVAssetReader): a comparação do `max` do Swift
+        // com NaN é sempre falsa e devolve o NaN mesmo, não o piso — e daí
+        // `20*log10(NaN)` continua NaN, e `NaN < limiar` também é sempre
+        // falso, então a janela seria classificada como FALA
+        // silenciosamente, mesmo devendo ser tratada como o piso. Checar
+        // `isFinite` explicitamente é o que faz o piso valer pra esse caso
+        // também, não só pro silêncio digital puro que o motivou.
+        let safeRMS = rms.isFinite ? max(rms, rmsFloor) : rmsFloor
+        return 20 * log10(safeRMS)
     }
 }

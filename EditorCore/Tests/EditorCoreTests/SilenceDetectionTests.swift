@@ -159,6 +159,21 @@ func decibelsMatchesDefinition() {
     #expect(isClose(SilenceDetection.decibels(ofWindow: unity[...]), 0, tolerance: 1e-6))
 }
 
+@Test("Uma amostra NaN na janela cai no piso em vez de propagar NaN pra classificação")
+func nanSampleFallsBackToFloorInsteadOfPoisoningComparison() {
+    // `max(rms, rmsFloor)` sozinho NÃO barra NaN (a comparação do Swift com
+    // NaN é sempre falsa) — sem o guard explícito de `isFinite`, isto
+    // devolveria NaN, e `NaN < limiar` é sempre falso, classificando a janela
+    // como fala mesmo devendo cair no piso de silêncio.
+    var withNaN = [Float](repeating: 0, count: 100)
+    withNaN[50] = Float.nan
+
+    let db = SilenceDetection.decibels(ofWindow: withNaN[...])
+
+    #expect(db.isFinite)
+    #expect(db < -100, "amostra corrompida tem que cair no piso, não virar 'fala' por engano")
+}
+
 @Test("Entradas degeneradas devolvem lista vazia em vez de travar")
 func degenerateInputsReturnEmpty() {
     #expect(SilenceDetection.keepRanges(samples: [], sampleRate: sr).isEmpty)
