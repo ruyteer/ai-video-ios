@@ -55,11 +55,6 @@ targets:
         # não só ao selecionado — aceitável pro escopo do projeto (uso
         # pessoal, só no aparelho do usuário, ver CLAUDE.md seção 0).
         INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Pra abrir o vídeo escolhido rápido, sem copiar o arquivo inteiro primeiro."
-        # Necessário pra transcrever o áudio do vídeo já cortado
-        # (SFSpeechRecognizer, ver ViralClip/Pipeline/Transcriber.swift) e
-        # gerar a legenda. Usa SFSpeechURLRecognitionRequest (arquivo, não
-        # microfone ao vivo), então NÃO precisa de NSMicrophoneUsageDescription.
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Pra transcrever a fala do vídeo e gerar a legenda automática."
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         # Propositalmente SEM CODE_SIGN_IDENTITY nem DEVELOPMENT_TEAM aqui —

@@ -1,126 +1,187 @@
 import SwiftUI
 import AVFoundation
 import Photos
+import UIKit
 import EditorCore
 
 private enum PipelineState {
     case idle
     case loadingInfo(progress: Double)
     case ready(asset: AVAsset, info: String)
+    case analyzingAudio
+    /// Áudio já extraído, aguardando o usuário ajustar o limiar e confirmar
+    /// o corte. `samples`/`sampleRate` ficam guardados aqui pra não precisar
+    /// re-extrair o áudio toda vez que o slider muda — só o corte em si
+    /// (`SilenceDetection.keepRanges`) é recalculado, e isso é rápido o
+    /// bastante pra rodar a cada movimento do slider sem travar a UI.
+    case configuringCut(asset: AVAsset, samples: [Float], sampleRate: Double, levels: [Double])
     case processing(step: String)
-    /// Corte pronto e já exportado (sem legenda ainda) — `cutFileURL` é o
-    /// arquivo intermediário no tmp, só existe até o usuário decidir salvar
-    /// com ou sem legenda (ver `skipCaptionsAndSave`/`applyCaptions`).
-    case cutReady(cutAsset: AVAsset, cutFileURL: URL)
     case done(message: String)
     case failed(String)
 }
 
 // Fase 1 (PLANO.md seção 6): escolher vídeo → cortar silêncio
-// (AVMutableComposition não-destrutiva) → exportar. Fase 2: transcrever o
-// corte (SFSpeechRecognizer, pt-BR) → escolher estilo/posição da legenda →
-// queimar via Core Animation → exportar final → salvar na galeria.
+// (AVMutableComposition não-destrutiva) → exportar → salvar na galeria.
+// O limiar de silêncio é ajustável pelo usuário antes do corte (ver
+// LevelCurveChart) — vídeos com ruído de fundo alto podem precisar de um
+// limiar diferente do -35dBFS default pra gerar corte nenhum.
 struct ContentView: View {
     @State private var showingPicker = false
     @State private var state: PipelineState = .idle
-    @State private var captionRevealStyle: CaptionRevealStyle = .wordByWord
-    @State private var captionPosition: CaptionPosition = .centerLower
-    // Erro específico da etapa de legenda: fica separado de `state` de
-    // propósito. Se um erro aqui derrubasse `state` pra `.failed`, o corte
-    // já pronto em `cutFileURL` ficaria inacessível e o usuário teria que
-    // repetir a análise de áudio + export inteiros de novo só pra tentar a
-    // legenda outra vez — em vez disso, o estado continua `.cutReady` e só
-    // mostramos o erro ao lado do seletor de estilo, pra tentar de novo (ou
-    // usar "Salvar sem legenda") sem perder o trabalho já feito.
-    @State private var captionErrorMessage: String?
+    @State private var cutConfig = SilenceCutConfig()
 
     var body: some View {
-        VStack(spacing: 20) {
+        ScrollView {
+            VStack(spacing: 20) {
+                header
+
+                pickerCard
+
+                switch state {
+                case .idle, .loadingInfo, .ready, .analyzingAudio, .processing:
+                    statusCard
+                case .configuringCut(let asset, let samples, let sampleRate, let levels):
+                    cutConfigCard(asset: asset, samples: samples, sampleRate: sampleRate, levels: levels)
+                case .done(let message):
+                    resultCard(message: message, systemImage: "checkmark.circle.fill", tint: .green)
+                case .failed(let message):
+                    resultCard(message: message, systemImage: "exclamationmark.triangle.fill", tint: .red)
+                    Button("Recomeçar", action: reset)
+                        .buttonStyle(.bordered)
+                }
+            }
+            .padding()
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+
+    // MARK: - Seções
+
+    private var header: some View {
+        VStack(spacing: 4) {
             Text("ViralClip")
                 .font(.largeTitle.bold())
+            Text("Corte automático de silêncio")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 8)
+    }
 
+    private var pickerCard: some View {
+        VStack(spacing: 12) {
             Button {
                 Task { await requestAccessAndShowPicker() }
             } label: {
                 Label("Escolher vídeo", systemImage: "video.badge.plus")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .sheet(isPresented: $showingPicker) {
                 PhotoLibraryPicker(isPresented: $showingPicker) { phAsset in
                     Task { await loadVideoInfo(from: phAsset) }
                 }
             }
 
-            statusView
-
             if case .ready(let asset, _) = state {
                 Button {
-                    Task { await cutSilenceAndExport(asset: asset) }
+                    Task { await analyzeAudio(asset: asset) }
                 } label: {
-                    Label("Cortar silêncio e exportar", systemImage: "scissors")
+                    Label("Analisar áudio", systemImage: "waveform")
+                        .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
-
-            if case .cutReady(let cutAsset, let cutFileURL) = state {
-                if let captionErrorMessage {
-                    Label(captionErrorMessage, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                        .multilineTextAlignment(.center)
-                }
-                CaptionStylePickerView(
-                    revealStyle: $captionRevealStyle,
-                    position: $captionPosition,
-                    onSkip: { Task { await skipCaptionsAndSave(cutFileURL: cutFileURL) } },
-                    onApply: {
-                        let settings = CaptionSettings(revealStyle: captionRevealStyle, position: captionPosition)
-                        Task { await applyCaptions(cutAsset: cutAsset, cutFileURL: cutFileURL, settings: settings) }
-                    }
-                )
-            }
-
-            if case .failed = state {
-                Button("Recomeçar", action: reset)
-                    .buttonStyle(.bordered)
-            }
-
-            Spacer()
         }
-        .padding()
-    }
-
-    private func reset() {
-        captionErrorMessage = nil
-        state = .idle
+        .cardStyle()
     }
 
     @ViewBuilder
-    private var statusView: some View {
-        switch state {
-        case .idle:
-            Text("Nenhum vídeo selecionado.")
-                .multilineTextAlignment(.center)
-        case .loadingInfo(let progress):
-            ProgressView(value: progress) {
-                Text("Carregando... \(Int(progress * 100))%")
+    private var statusCard: some View {
+        VStack(spacing: 10) {
+            switch state {
+            case .idle:
+                Label("Nenhum vídeo selecionado", systemImage: "film")
+                    .foregroundStyle(.secondary)
+            case .loadingInfo(let progress):
+                ProgressView(value: progress) {
+                    Text("Carregando... \(Int(progress * 100))%")
+                }
+            case .ready(_, let info):
+                Label(info, systemImage: "info.circle")
+                    .multilineTextAlignment(.leading)
+            case .analyzingAudio:
+                ProgressView("Analisando áudio...")
+            case .processing(let step):
+                ProgressView(step)
+            default:
+                EmptyView()
             }
-        case .ready(_, let info):
-            Text(info).multilineTextAlignment(.center)
-        case .processing(let step):
-            ProgressView(step)
-        case .cutReady:
-            Text("Corte pronto. Escolha a legenda abaixo.")
-                .multilineTextAlignment(.center)
-        case .done(let message):
-            Label(message, systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .multilineTextAlignment(.center)
-        case .failed(let message):
-            Label(message, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .multilineTextAlignment(.center)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardStyle()
     }
+
+    private func cutConfigCard(asset: AVAsset, samples: [Float], sampleRate: Double, levels: [Double]) -> some View {
+        let keepRanges = SilenceDetection.keepRanges(samples: samples, sampleRate: sampleRate, config: cutConfig)
+        let totalDuration = Double(samples.count) / sampleRate
+        let keptDuration = keepRanges.reduce(0) { $0 + $1.duration }
+        let cutCount = max(0, keepRanges.count - 1)
+
+        return VStack(alignment: .leading, spacing: 14) {
+            Label("Ajustar corte", systemImage: "slider.horizontal.3")
+                .font(.headline)
+
+            LevelCurveChart(levels: levels, thresholdDB: Double(cutConfig.silenceThresholdDB))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Limiar de silêncio: \(Int(cutConfig.silenceThresholdDB)) dBFS")
+                    .font(.subheadline)
+                Slider(value: $cutConfig.silenceThresholdDB, in: -55...(-5), step: 1)
+                Text("Barras cinza (abaixo da linha vermelha) viram corte. Vídeo com ruído de fundo alto pode precisar de um limiar menos negativo (mais à direita) pra gerar corte de verdade.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(
+                keepRanges.isEmpty
+                    ? "Com esse limiar, o áudio inteiro seria classificado como silêncio."
+                    : String(
+                        format: "%d corte%@ · sobra %.0fs de %.0fs originais",
+                        cutCount, cutCount == 1 ? "" : "s", keptDuration, totalDuration
+                    )
+            )
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+
+            Button {
+                Task { await cutSilenceAndExport(asset: asset, samples: samples, sampleRate: sampleRate) }
+            } label: {
+                Label("Cortar e exportar", systemImage: "scissors")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(keepRanges.isEmpty)
+        }
+        .cardStyle()
+    }
+
+    private func resultCard(message: String, systemImage: String, tint: Color) -> some View {
+        Label(message, systemImage: systemImage)
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardStyle()
+    }
+
+    private func reset() {
+        cutConfig = SilenceCutConfig()
+        state = .idle
+    }
+
+    // MARK: - Pipeline
 
     private func requestAccessAndShowPicker() async {
         // Precisa ter a permissão ANTES de abrir o picker: o coordinator do
@@ -172,12 +233,21 @@ struct ContentView: View {
         }
     }
 
-    private func cutSilenceAndExport(asset: AVAsset) async {
+    private func analyzeAudio(asset: AVAsset) async {
+        state = .analyzingAudio
         do {
-            state = .processing(step: "Analisando áudio...")
             let (samples, sampleRate) = try await AudioSampleExtractor.extractMonoPCM(from: asset)
-            let keepRanges = SilenceDetection.keepRanges(samples: samples, sampleRate: sampleRate)
+            let levels = AudioLevelCurve.levels(samples: samples, sampleRate: sampleRate)
+            cutConfig = SilenceCutConfig()
+            state = .configuringCut(asset: asset, samples: samples, sampleRate: sampleRate, levels: levels)
+        } catch {
+            state = .failed("Erro ao analisar áudio: \(error.localizedDescription)")
+        }
+    }
 
+    private func cutSilenceAndExport(asset: AVAsset, samples: [Float], sampleRate: Double) async {
+        do {
+            let keepRanges = SilenceDetection.keepRanges(samples: samples, sampleRate: sampleRate, config: cutConfig)
             guard !keepRanges.isEmpty else {
                 state = .failed("O áudio inteiro foi classificado como silêncio — nada a manter.")
                 return
@@ -186,78 +256,36 @@ struct ContentView: View {
             state = .processing(step: "Montando o corte...")
             let composition = try await CompositionBuilder.build(asset: asset, keepRanges: keepRanges)
 
-            state = .processing(step: "Exportando corte...")
-            let cutURL = FileManager.default.temporaryDirectory
+            state = .processing(step: "Exportando...")
+            let outputURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("mov")
-            try await VideoExporter.export(asset: composition, to: cutURL)
+            try await VideoExporter.export(asset: composition, to: outputURL)
 
-            // Reabre o arquivo exportado como asset — é sobre ELE que a
-            // transcrição e a legenda vão rodar depois (ver PLANO.md seção
-            // 3: transcrição roda no vídeo JÁ cortado, não no original).
-            state = .cutReady(cutAsset: AVURLAsset(url: cutURL), cutFileURL: cutURL)
+            state = .processing(step: "Salvando na galeria...")
+            try await PhotoLibrarySaver.saveVideo(at: outputURL)
+            try? FileManager.default.removeItem(at: outputURL)
+
+            let cutCount = keepRanges.count - 1
+            state = .done(message: "Exportado e salvo na galeria (\(cutCount) corte\(cutCount == 1 ? "" : "s") de silêncio).")
         } catch {
             state = .failed("Erro ao processar: \(error.localizedDescription)")
         }
     }
+}
 
-    private func skipCaptionsAndSave(cutFileURL: URL) async {
-        captionErrorMessage = nil
-        do {
-            state = .processing(step: "Salvando na galeria...")
-            try await PhotoLibrarySaver.saveVideo(at: cutFileURL)
-            try? FileManager.default.removeItem(at: cutFileURL)
-            state = .done(message: "Corte exportado e salvo na galeria, sem legenda.")
-        } catch {
-            // Volta pro cutReady em vez de .failed: o corte continua no
-            // mesmo cutFileURL, então dá pra tentar salvar de novo (ou
-            // aplicar legenda) sem refazer o corte inteiro.
-            captionErrorMessage = error.localizedDescription
-            state = .cutReady(cutAsset: AVURLAsset(url: cutFileURL), cutFileURL: cutFileURL)
-        }
+private struct CardStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
+}
 
-    private func applyCaptions(cutAsset: AVAsset, cutFileURL: URL, settings: CaptionSettings) async {
-        captionErrorMessage = nil
-        do {
-            state = .processing(step: "Transcrevendo áudio...")
-            let transcription = try await Transcriber.transcribe(url: cutFileURL)
-            let cues = CaptionCueBuilder.cues(from: transcription.words, settings: settings)
-            let serverNotice = transcription.wasOnDevice
-                ? ""
-                : " (transcrito via servidor da Apple — reconhecimento local indisponível neste aparelho agora)"
-
-            guard !cues.isEmpty else {
-                state = .processing(step: "Salvando na galeria...")
-                try await PhotoLibrarySaver.saveVideo(at: cutFileURL)
-                try? FileManager.default.removeItem(at: cutFileURL)
-                state = .done(message: "Nenhuma fala reconhecida pra legendar — corte salvo sem legenda.")
-                return
-            }
-
-            state = .processing(step: "Montando a legenda...")
-            let videoComposition = try await CaptionOverlayBuilder.build(asset: cutAsset, cues: cues, settings: settings)
-
-            state = .processing(step: "Exportando com legenda...")
-            let finalURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-                .appendingPathExtension("mov")
-            try await VideoExporter.export(asset: cutAsset, videoComposition: videoComposition, to: finalURL)
-
-            state = .processing(step: "Salvando na galeria...")
-            try await PhotoLibrarySaver.saveVideo(at: finalURL)
-            try? FileManager.default.removeItem(at: finalURL)
-            try? FileManager.default.removeItem(at: cutFileURL)
-
-            state = .done(message: "Exportado com legenda e salvo na galeria (\(cues.count) trecho\(cues.count == 1 ? "" : "s"))\(serverNotice).")
-        } catch {
-            // Mesmo raciocínio do skipCaptionsAndSave: volta pro cutReady
-            // (cutFileURL continua válido) em vez de matar o corte já
-            // pronto por causa de um erro só na etapa de legenda.
-            captionErrorMessage = error.localizedDescription
-            state = .cutReady(cutAsset: cutAsset, cutFileURL: cutFileURL)
-        }
-    }
+private extension View {
+    func cardStyle() -> some View { modifier(CardStyle()) }
 }
 
 #Preview {

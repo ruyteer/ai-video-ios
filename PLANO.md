@@ -153,10 +153,18 @@ composição/export não-destrutivo no app. Entregável: escolher um vídeo da
 galeria, cortar silêncio, exportar, salvar. **Sem legenda, sem transcrição,
 sem zoom ainda.**
 
-**Fase 2 — Legenda**
-Transcrição via `SFSpeechRecognizer` (ver risco de qualidade abaixo) +
-legenda animada queimada no vídeo via Core Animation. Um template só pra
-validar o pipeline; mais templates depois se este funcionar bem.
+**Fase 1.5 — Limiar de corte ajustável**
+Fase 1 validada ponta a ponta no device real, mas vídeo com ruído de fundo
+alto (limiar default -35dBFS não separa bem fala de ruído) podia gerar
+corte nenhum. Tela de ajuste antes do corte: `AudioLevelCurve` (EditorCore,
+lógica pura testada) mostra o nível do áudio do vídeo escolhido, o usuário
+ajusta `SilenceCutConfig.silenceThresholdDB` com um slider e vê a prévia
+(quantos cortes, quanto sobra) recalculada ao vivo antes de confirmar.
+
+**Fase 2 — Legenda (tentada e revertida, ver seção 7)**
+Chegou a ser implementada (transcrição via `SFSpeechRecognizer` + legenda
+queimada no vídeo) mas removida depois de três tentativas sem sucesso em
+device real — ver o risco documentado na seção 7 antes de tentar de novo.
 
 **Fase 3 — Zoom de ênfase + efeitos**
 RMS de ênfase (mesma lógica pura), zoom via `CAKeyframeAnimation`, SFX,
@@ -180,9 +188,25 @@ pronta, decide-se o próximo passo com o app já funcionando na mão.
 - **Expiração de 7 dias** do app assinado por conta grátis — reinstala
   semanalmente via AltServer (ver seção 2.2 sobre o Shift-clique pra
   sideload de `.ipa` próprio).
-- **Qualidade do `SFSpeechRecognizer`** pode não bastar — plano B é
-  `whisper.cpp` embarcado, decisão adiada pra quando houver dado real da
-  Fase 2 (custo real: aumenta tamanho do app e tempo de processamento).
+- **Legenda queimada via `AVVideoCompositionCoreAnimationTool` (`CATextLayer`
+  + `CAAnimation`) não funcionou em três tentativas** — primeira vez causou
+  jetsam kill por memória (`contentsScale` desnecessário em cada camada de
+  texto — corrigido, mas não resolveu o problema seguinte); depois disso, a
+  legenda simplesmente não aparecia no export, mesmo com a timing mais
+  documentada (`AVCoreAnimationBeginTimeAtZero`), com ou sem
+  `CAAnimationGroup`. Reescrita com `AVMutableVideoComposition(asset:
+  applyingCIFiltersWithHandler:)` (controle direto por frame, sem timing de
+  Core Animation) também não funcionou — apareceu um quadrado cortado com
+  fundo escuro no fim do vídeo, não a legenda esperada. Removida por
+  completo (ver Fase 2 acima) até haver um motivo forte pra tentar de novo
+  com mais tempo de iteração — provavelmente vale medir/depurar com um
+  vídeo de teste bem curto antes de reintroduzir.
+  Se for retomado no futuro: `SFSpeechRecognizer` como transcrição segue
+  válido (funcionou, com fallback pro servidor da Apple quando o
+  reconhecimento local falha por causa do Dictation desligado); o problema
+  foi só na etapa de queimar a legenda no vídeo. Plano B pra transcrição em
+  si, se a qualidade do `SFSpeechRecognizer` não bastar, continua sendo
+  `whisper.cpp` embarcado.
 - **Sem Simulator com performance real** — todo teste de composição precisa
   do iPhone físico via CI, por isso vale exaurir o teste da lógica pura antes
   de gastar um ciclo de CI.
