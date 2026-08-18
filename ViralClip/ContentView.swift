@@ -9,13 +9,18 @@ private enum PipelineState {
     case loadingInfo(progress: Double)
     case ready(asset: AVURLAsset, info: String)
     case processing(step: String)
+    /// Corte pronto e já exportado (sem legenda ainda) — `cutFileURL` é o
+    /// arquivo intermediário no tmp, só existe até o usuário decidir salvar
+    /// com ou sem legenda (ver `skipCaptionsAndSave`/`applyCaptions`).
+    case cutReady(cutAsset: AVURLAsset, cutFileURL: URL)
     case done(message: String)
     case failed(String)
 }
 
-// Fase 1 (ver PLANO.md seção 6): escolher vídeo → cortar silêncio
-// (AVMutableComposition não-destrutiva) → exportar → salvar na galeria.
-// Sem legenda, transcrição ou zoom ainda — só o corte, de ponta a ponta.
+// Fase 1 (PLANO.md seção 6): escolher vídeo → cortar silêncio
+// (AVMutableComposition não-destrutiva) → exportar. Fase 2: transcrever o
+// corte (SFSpeechRecognizer, pt-BR) → escolher estilo/posição da legenda →
+// queimar via Core Animation → exportar final → salvar na galeria.
 struct ContentView: View {
     @State private var selectedItem: PhotosPickerItem?
     @State private var state: PipelineState = .idle
@@ -24,6 +29,8 @@ struct ContentView: View {
     // guardar só o valor (Double) no enum e a observação aqui evita recriar
     // o NSKeyValueObservation a cada re-render.
     @State private var loadProgressObservation: NSKeyValueObservation?
+    @State private var captionRevealStyle: CaptionRevealStyle = .wordByWord
+    @State private var captionPosition: CaptionPosition = .centerLower
 
     var body: some View {
         VStack(spacing: 20) {
@@ -50,6 +57,18 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             }
 
+            if case .cutReady(let cutAsset, let cutFileURL) = state {
+                CaptionStylePickerView(
+                    revealStyle: $captionRevealStyle,
+                    position: $captionPosition,
+                    onSkip: { Task { await skipCaptionsAndSave(cutFileURL: cutFileURL) } },
+                    onApply: {
+                        let settings = CaptionSettings(revealStyle: captionRevealStyle, position: captionPosition)
+                        Task { await applyCaptions(cutAsset: cutAsset, cutFileURL: cutFileURL, settings: settings) }
+                    }
+                )
+            }
+
             Spacer()
         }
         .padding()
@@ -73,6 +92,9 @@ struct ContentView: View {
             Text(info).multilineTextAlignment(.center)
         case .processing(let step):
             ProgressView(step)
+        case .cutReady:
+            Text("Corte pronto. Escolha a legenda abaixo.")
+                .multilineTextAlignment(.center)
         case .done(let message):
             Label(message, systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
@@ -155,20 +177,63 @@ struct ContentView: View {
             state = .processing(step: "Montando o corte...")
             let composition = try await CompositionBuilder.build(asset: asset, keepRanges: keepRanges)
 
-            state = .processing(step: "Exportando...")
-            let outputURL = FileManager.default.temporaryDirectory
+            state = .processing(step: "Exportando corte...")
+            let cutURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent(UUID().uuidString)
                 .appendingPathExtension("mov")
-            try await VideoExporter.export(composition: composition, to: outputURL)
+            try await VideoExporter.export(asset: composition, to: cutURL)
 
-            state = .processing(step: "Salvando na galeria...")
-            try await PhotoLibrarySaver.saveVideo(at: outputURL)
-            try? FileManager.default.removeItem(at: outputURL)
-
-            let cutCount = keepRanges.count - 1
-            state = .done(message: "Exportado e salvo na galeria (\(cutCount) corte\(cutCount == 1 ? "" : "s") de silêncio).")
+            // Reabre o arquivo exportado como asset — é sobre ELE que a
+            // transcrição e a legenda vão rodar depois (ver PLANO.md seção
+            // 3: transcrição roda no vídeo JÁ cortado, não no original).
+            state = .cutReady(cutAsset: AVURLAsset(url: cutURL), cutFileURL: cutURL)
         } catch {
             state = .failed("Erro ao processar: \(error.localizedDescription)")
+        }
+    }
+
+    private func skipCaptionsAndSave(cutFileURL: URL) async {
+        do {
+            state = .processing(step: "Salvando na galeria...")
+            try await PhotoLibrarySaver.saveVideo(at: cutFileURL)
+            try? FileManager.default.removeItem(at: cutFileURL)
+            state = .done(message: "Corte exportado e salvo na galeria, sem legenda.")
+        } catch {
+            state = .failed("Erro ao salvar: \(error.localizedDescription)")
+        }
+    }
+
+    private func applyCaptions(cutAsset: AVURLAsset, cutFileURL: URL, settings: CaptionSettings) async {
+        do {
+            state = .processing(step: "Transcrevendo áudio...")
+            let words = try await Transcriber.transcribe(url: cutFileURL)
+            let cues = CaptionCueBuilder.cues(from: words, settings: settings)
+
+            guard !cues.isEmpty else {
+                state = .processing(step: "Salvando na galeria...")
+                try await PhotoLibrarySaver.saveVideo(at: cutFileURL)
+                try? FileManager.default.removeItem(at: cutFileURL)
+                state = .done(message: "Nenhuma fala reconhecida pra legendar — corte salvo sem legenda.")
+                return
+            }
+
+            state = .processing(step: "Montando a legenda...")
+            let videoComposition = try await CaptionOverlayBuilder.build(asset: cutAsset, cues: cues, settings: settings)
+
+            state = .processing(step: "Exportando com legenda...")
+            let finalURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mov")
+            try await VideoExporter.export(asset: cutAsset, videoComposition: videoComposition, to: finalURL)
+
+            state = .processing(step: "Salvando na galeria...")
+            try await PhotoLibrarySaver.saveVideo(at: finalURL)
+            try? FileManager.default.removeItem(at: finalURL)
+            try? FileManager.default.removeItem(at: cutFileURL)
+
+            state = .done(message: "Exportado com legenda e salvo na galeria (\(cues.count) trecho\(cues.count == 1 ? "" : "s")).")
+        } catch {
+            state = .failed("Erro ao aplicar legenda: \(error.localizedDescription)")
         }
     }
 }
