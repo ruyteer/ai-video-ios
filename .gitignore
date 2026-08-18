@@ -1,0 +1,24 @@
+# Xcode / gerado pelo XcodeGen — nunca comitar o .xcodeproj, ele é gerado a
+# partir de project.yml no CI (xcodegen generate). Comitar os dois divergiria
+# com o tempo e um dos dois ficaria mentindo.
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+build/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Artefatos de export/instalação — não fazem sentido versionados
+*.ipa
+*.xcarchive/
+
+# macOS/Windows
+.DS_Store
+Thumbs.db
+
+# Segredos locais, se algum dia existirem (nenhum esperado neste projeto —
+# ver seção 7 do PLANO.md do projeto irmão sobre por quê)
+.env
