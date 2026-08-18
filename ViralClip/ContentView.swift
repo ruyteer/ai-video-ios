@@ -6,7 +6,7 @@ import EditorCore
 
 private enum PipelineState {
     case idle
-    case loadingInfo
+    case loadingInfo(progress: Double)
     case ready(asset: AVURLAsset, info: String)
     case processing(step: String)
     case done(message: String)
@@ -19,6 +19,11 @@ private enum PipelineState {
 struct ContentView: View {
     @State private var selectedItem: PhotosPickerItem?
     @State private var state: PipelineState = .idle
+    // Precisa viver fora do enum de estado porque a observação KVO do
+    // Progress atualiza esta referência de fora do fluxo normal de SwiftUI —
+    // guardar só o valor (Double) no enum e a observação aqui evita recriar
+    // o NSKeyValueObservation a cada re-render.
+    @State private var loadProgressObservation: NSKeyValueObservation?
 
     var body: some View {
         VStack(spacing: 20) {
@@ -60,8 +65,10 @@ struct ContentView: View {
         case .idle:
             Text("Nenhum vídeo selecionado.")
                 .multilineTextAlignment(.center)
-        case .loadingInfo:
-            ProgressView("Carregando...")
+        case .loadingInfo(let progress):
+            ProgressView(value: progress) {
+                Text("Carregando... \(Int(progress * 100))%")
+            }
         case .ready(_, let info):
             Text(info).multilineTextAlignment(.center)
         case .processing(let step):
@@ -78,10 +85,28 @@ struct ContentView: View {
     }
 
     private func loadVideoInfo(from item: PhotosPickerItem) async {
-        state = .loadingInfo
+        state = .loadingInfo(progress: 0)
 
         do {
-            guard let movie = try await item.loadTransferable(type: Movie.self) else {
+            // A variante com completionHandler (em vez do `loadTransferable`
+            // async simples) é a única que devolve um `Progress` observável —
+            // cobre tanto o download do iCloud (quando o original não está
+            // no aparelho) quanto a cópia local, que é o que causava a
+            // sensação de "travado" sem indicação nenhuma antes disso.
+            let movie: Movie? = try await withCheckedThrowingContinuation { continuation in
+                let progress = item.loadTransferable(type: Movie.self) { result in
+                    continuation.resume(with: result)
+                }
+                loadProgressObservation = progress.observe(\.fractionCompleted, options: [.new]) { progress, _ in
+                    let fraction = progress.fractionCompleted
+                    Task { @MainActor in
+                        state = .loadingInfo(progress: fraction)
+                    }
+                }
+            }
+            loadProgressObservation = nil
+
+            guard let movie else {
                 state = .failed("Não foi possível carregar o vídeo selecionado.")
                 return
             }
@@ -111,6 +136,7 @@ struct ContentView: View {
             )
             state = .ready(asset: asset, info: info)
         } catch {
+            loadProgressObservation = nil
             state = .failed("Erro ao ler o vídeo: \(error.localizedDescription)")
         }
     }
