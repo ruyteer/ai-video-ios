@@ -57,9 +57,16 @@ rápido sem depender de CI.
 1. GitHub Actions (`macos-latest`) roda `xcodegen generate` → `xcodebuild`
    (`CODE_SIGNING_ALLOWED=NO`, sem certificado nenhum) → empacota um `.ipa`
    **não assinado** como artefato.
-2. Você baixa o `.ipa` e usa o **Sideloadly** (grátis, roda no Windows) pra
-   assinar com seu Apple ID grátis e instalar no iPhone via cabo USB — mesmo
-   mecanismo por trás do AltStore, ferramenta madura.
+2. Você baixa o `.ipa` e usa o **AltServer/AltStore** (grátis, roda no
+   Windows) pra assinar com seu Apple ID grátis e instalar no iPhone via
+   cabo USB. Testado nesta máquina: o Sideloadly (a alternativa mais citada
+   por aí) falha aqui com um erro de Anisette local (`iTunesCore.dll` não
+   encontrado, provavelmente antivírus colocando o DLL em quarentena) — o
+   AltServer é quem funcionou de fato, e é o caminho documentado neste
+   projeto a partir daqui. Detalhe não óbvio do AltServer no Windows: pra
+   instalar um `.ipa` próprio (não o AltStore em si), segura **Shift** e
+   clica no ícone do AltServer na bandeja pra abrir o menu escondido
+   "Sideload .ipa…".
 3. **Limitação real, sem meio-termo:** apps assinados com Apple ID grátis
    expiram em 7 dias — reinstala toda semana.
 4. **O que se perde nesse fluxo:** preview ao vivo de SwiftUI, breakpoint,
@@ -140,7 +147,7 @@ ai-video-ios/
 ## 6. Fases (reduzidas ao essencial — uma ferramenta funcionando por vez)
 
 **Fase 1 — Corte, ponta a ponta**
-Bootstrap do projeto (XcodeGen + workflow do CI + validar Sideloadly com um
+Bootstrap do projeto (XcodeGen + workflow do CI + validar AltServer com um
 app mínimo) + `SilenceDetection` em `EditorCore` (testado no Windows) +
 composição/export não-destrutivo no app. Entregável: escolher um vídeo da
 galeria, cortar silêncio, exportar, salvar. **Sem legenda, sem transcrição,
@@ -171,7 +178,8 @@ pronta, decide-se o próximo passo com o app já funcionando na mão.
 - **Ciclo de UI lento** é estrutural — resolvido só minimizando quanto código
   vive fora de `EditorCore`.
 - **Expiração de 7 dias** do app assinado por conta grátis — reinstala
-  semanalmente via Sideloadly.
+  semanalmente via AltServer (ver seção 2.2 sobre o Shift-clique pra
+  sideload de `.ipa` próprio).
 - **Qualidade do `SFSpeechRecognizer`** pode não bastar — plano B é
   `whisper.cpp` embarcado, decisão adiada pra quando houver dado real da
   Fase 2 (custo real: aumenta tamanho do app e tempo de processamento).

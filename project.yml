@@ -42,10 +42,15 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # Necessário pra salvar o vídeo cortado de volta na galeria
+        # (PHPhotoLibrary, ver ViralClip/Pipeline/PhotoLibrarySaver.swift).
+        # PhotosPicker (leitura, na seleção do vídeo original) não precisa de
+        # permissão própria — só a escrita de volta precisa.
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Pra salvar o vídeo cortado de volta na sua galeria."
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
         # Propositalmente SEM CODE_SIGN_IDENTITY nem DEVELOPMENT_TEAM aqui —
-        # a assinatura de verdade acontece depois, fora do CI, no Sideloadly
+        # a assinatura de verdade acontece depois, fora do CI, no AltServer
         # do lado do usuário (ver PLANO.md seção 2.2/2.4 e CLAUDE.md seção 7).
         # O workflow do GitHub Actions builda com
         # CODE_SIGNING_ALLOWED=NO/CODE_SIGNING_REQUIRED=NO justamente pra não

@@ -4,12 +4,20 @@
 #
 # Fluxo completo (o que acontece depois deste workflow, fora do GitHub):
 #   1. Baixe o artefato "ViralClip-ipa" desta execução (aba Actions do repo).
-#   2. Abra o Sideloadly (grátis, roda no Windows) no seu PC.
-#   3. Conecte o iPhone via cabo USB, arraste o .ipa baixado pro Sideloadly.
+#   2. Abra o AltServer (grátis, roda no Windows) no seu PC — ícone fica na
+#      bandeja do sistema. Segure Shift e clique no ícone pra abrir o menu
+#      escondido "Sideload .ipa…" (clique normal só mostra "Install AltStore").
+#   3. Conecte o iPhone via cabo USB, escolha o .ipa baixado no diálogo.
 #   4. Faça login com um Apple ID grátis (sem conta de desenvolvedor paga) —
-#      o Sideloadly assina o .ipa localmente com esse Apple ID e instala.
+#      o AltServer assina o .ipa localmente com esse Apple ID e instala.
 #   5. Limitação real (ver PLANO.md seção 2.2/7): apps assinados por Apple ID
 #      grátis expiram em 7 dias — repita os passos 1-4 toda semana.
+#
+# Por que AltServer e não Sideloadly (mais citado por aí): testado nesta
+# máquina, o Sideloadly falha com um erro de Anisette local (arquivo
+# `iTunesCore.dll` ausente, provavelmente antivírus colocando em quarentena)
+# que não foi resolvido nem limpando a pasta de cache dele nem usando
+# Anisette remoto. O AltServer funcionou de primeira.
 #
 # Por que não tem `-exportArchive` nem `xcodebuild archive` aqui: exportar um
 # .xcarchive assinado exige um método de exportação (development/ad-hoc) que
@@ -18,12 +26,12 @@
 # CLAUDE.md seção 7). Em vez disso, buildamos direto (sem archive) e montamos
 # o .ipa manualmente: um .ipa não é nada além de um zip com a estrutura
 # `Payload/NomeDoApp.app` dentro — não precisa de assinatura pra existir como
-# arquivo, só pra rodar num device (isso o Sideloadly resolve depois).
+# arquivo, só pra rodar num device (isso o AltServer resolve depois).
 #
 # AVISO PRA QUEM MEXER AQUI NO FUTURO: NÃO adicione CODE_SIGN_IDENTITY,
 # DEVELOPMENT_TEAM, nem nenhum secret de certificado/provisioning profile
 # neste workflow. Isso desviaria da arquitetura decidida no PLANO.md — a
-# assinatura é 100% responsabilidade do Sideloadly, do lado do usuário, fora
+# assinatura é 100% responsabilidade do AltServer, do lado do usuário, fora
 # do CI. Se um novo requisito parecer exigir isso, pare e confirme com o
 # usuário antes de adicionar.
 

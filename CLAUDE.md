@@ -7,7 +7,8 @@ paralelo, do mesmo jeito que o projeto irmão `ai-video` já faz — mas com uma
 diferença crítica que muda tudo: **não há Mac disponível nesta máquina.**
 
 **Escopo do projeto:** uso pessoal, app instalado só no iPhone do usuário via
-Sideloadly (não App Store, não TestFlight, não distribuição pra ninguém).
+AltServer/AltStore (não App Store, não TestFlight, não distribuição pra
+ninguém).
 Repositório GitHub existe **só porque o GitHub Actions precisa de um runner
 macOS pra compilar** — não é pra colaboração nem distribuição.
 
@@ -38,7 +39,8 @@ desperdiçado se for ignorado:
 - **Qualquer código em `ViralClip/`** (o app de fato: SwiftUI, AVFoundation,
   Speech, Core Animation) **não compila nem roda nesta máquina, nunca**. Só
   valida de verdade via GitHub Actions (`macos-latest`) + instalação real no
-  iPhone do usuário via Sideloadly. Um agente que só tem acesso a este
+  iPhone do usuário via AltServer (ver seção 2.2 sobre por que não é
+  Sideloadly nesta máquina). Um agente que só tem acesso a este
   Windows **não consegue rodar `xcodebuild`** — o máximo que dá pra fazer é
   escrever o código com cuidado, checar sintaxe/lógica por leitura, e deixar
   claro no relatório final que a validação de compilação real fica pro
@@ -108,7 +110,7 @@ Mesmo processo do projeto irmão (skill `code-review`), com uma adição:
   segurança que este projeto tem sem Mac.
 - Para código de `ViralClip`, a revisão de código (leitura) é o que se pode
   fazer *antes* do merge; a validação real (compila? instala? funciona no
-  vídeo de verdade?) só acontece depois, via CI + Sideloadly, e é o
+  vídeo de verdade?) só acontece depois, via CI + AltServer, e é o
   orquestrador quem confirma isso pessoalmente antes de marcar a fase como
   concluída — nunca confiar só no relato do agente aqui, porque o agente
   fisicamente não conseguiu compilar o que escreveu.
@@ -120,7 +122,7 @@ Mesmo processo do projeto irmão (skill `code-review`), com uma adição:
 Mesmo processo do projeto irmão (`.env.example`, nunca hardcoded). Ponto
 específico deste projeto: **o CI não deve precisar de nenhum secret de
 assinatura de código** (sem certificado, sem provisioning profile como
-secret do GitHub) — a assinatura acontece localmente no Sideloadly, do lado
+secret do GitHub) — a assinatura acontece localmente no AltServer, do lado
 do usuário, não no CI. Se um agente achar que precisa de um secret de
 assinatura no workflow do GitHub Actions, isso é sinal de desvio da
 arquitetura do PLANO.md (seção 2.2) — pare e avise o orquestrador antes de

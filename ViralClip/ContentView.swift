@@ -2,15 +2,23 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 import UniformTypeIdentifiers
+import EditorCore
 
-// App mínimo da Fase 1 (bootstrap): só prova que PhotosUI + AVFoundation
-// básico funcionam de ponta a ponta num device real via CI + Sideloadly,
-// ANTES de implementar o corte de verdade (ver PLANO.md seção 6, Fase 1).
-// Nenhuma lógica de corte entra aqui ainda.
+private enum PipelineState {
+    case idle
+    case loadingInfo
+    case ready(asset: AVURLAsset, info: String)
+    case processing(step: String)
+    case done(message: String)
+    case failed(String)
+}
+
+// Fase 1 (ver PLANO.md seção 6): escolher vídeo → cortar silêncio
+// (AVMutableComposition não-destrutiva) → exportar → salvar na galeria.
+// Sem legenda, transcrição ou zoom ainda — só o corte, de ponta a ponta.
 struct ContentView: View {
     @State private var selectedItem: PhotosPickerItem?
-    @State private var videoInfo: String = "Nenhum vídeo selecionado."
-    @State private var isLoading = false
+    @State private var state: PipelineState = .idle
 
     var body: some View {
         VStack(spacing: 20) {
@@ -26,14 +34,16 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
 
-            if isLoading {
-                ProgressView()
-            }
+            statusView
 
-            Text(videoInfo)
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .padding()
+            if case .ready(let asset, _) = state {
+                Button {
+                    Task { await cutSilenceAndExport(asset: asset) }
+                } label: {
+                    Label("Cortar silêncio e exportar", systemImage: "scissors")
+                }
+                .buttonStyle(.borderedProminent)
+            }
 
             Spacer()
         }
@@ -44,14 +54,35 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private var statusView: some View {
+        switch state {
+        case .idle:
+            Text("Nenhum vídeo selecionado.")
+                .multilineTextAlignment(.center)
+        case .loadingInfo:
+            ProgressView("Carregando...")
+        case .ready(_, let info):
+            Text(info).multilineTextAlignment(.center)
+        case .processing(let step):
+            ProgressView(step)
+        case .done(let message):
+            Label(message, systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .multilineTextAlignment(.center)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .multilineTextAlignment(.center)
+        }
+    }
+
     private func loadVideoInfo(from item: PhotosPickerItem) async {
-        isLoading = true
-        videoInfo = "Carregando..."
-        defer { isLoading = false }
+        state = .loadingInfo
 
         do {
             guard let movie = try await item.loadTransferable(type: Movie.self) else {
-                videoInfo = "Não foi possível carregar o vídeo selecionado."
+                state = .failed("Não foi possível carregar o vídeo selecionado.")
                 return
             }
 
@@ -60,7 +91,7 @@ struct ContentView: View {
             let seconds = CMTimeGetSeconds(duration)
 
             guard let track = try await asset.loadTracks(withMediaType: .video).first else {
-                videoInfo = String(format: "Duração: %.1fs\n(sem trilha de vídeo)", seconds)
+                state = .failed("Vídeo sem trilha de vídeo.")
                 return
             }
 
@@ -74,23 +105,44 @@ struct ContentView: View {
             let width = abs(transformedSize.width)
             let height = abs(transformedSize.height)
 
-            videoInfo = String(
+            let info = String(
                 format: "Duração: %.1fs\nResolução: %.0fx%.0f",
                 seconds, width, height
             )
-
-            // TODO: aqui é onde o corte de verdade vai entrar, depois que
-            // EditorCore.SilenceDetection estiver mesclado e este bootstrap
-            // validado via CI real: extrair PCM de `movie.url` (AVFoundation,
-            // única parte que precisa tocar em AVAsset diretamente), passar
-            // as amostras pra EditorCore.SilenceDetection.keepRanges (lógica
-            // pura, já testada no Windows via `swift test`), montar a
-            // AVMutableComposition com os trechos retornados e exportar via
-            // AVAssetExportPresetPassthrough (ver PLANO.md seção 4). Não
-            // implementado nesta tarefa — depende de uma API (extração de
-            // PCM real) ainda não validada.
+            state = .ready(asset: asset, info: info)
         } catch {
-            videoInfo = "Erro ao ler o vídeo: \(error.localizedDescription)"
+            state = .failed("Erro ao ler o vídeo: \(error.localizedDescription)")
+        }
+    }
+
+    private func cutSilenceAndExport(asset: AVURLAsset) async {
+        do {
+            state = .processing(step: "Analisando áudio...")
+            let (samples, sampleRate) = try await AudioSampleExtractor.extractMonoPCM(from: asset)
+            let keepRanges = SilenceDetection.keepRanges(samples: samples, sampleRate: sampleRate)
+
+            guard !keepRanges.isEmpty else {
+                state = .failed("O áudio inteiro foi classificado como silêncio — nada a manter.")
+                return
+            }
+
+            state = .processing(step: "Montando o corte...")
+            let composition = try await CompositionBuilder.build(asset: asset, keepRanges: keepRanges)
+
+            state = .processing(step: "Exportando...")
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("mov")
+            try await VideoExporter.export(composition: composition, to: outputURL)
+
+            state = .processing(step: "Salvando na galeria...")
+            try await PhotoLibrarySaver.saveVideo(at: outputURL)
+            try? FileManager.default.removeItem(at: outputURL)
+
+            let cutCount = keepRanges.count - 1
+            state = .done("Exportado e salvo na galeria (\(cutCount) corte\(cutCount == 1 ? "" : "s") de silêncio).")
+        } catch {
+            state = .failed("Erro ao processar: \(error.localizedDescription)")
         }
     }
 }
