@@ -33,7 +33,6 @@ enum CaptionOverlayBuilder {
         let transformed = naturalSize.applying(transform)
         let renderSize = CGSize(width: abs(transformed.width), height: abs(transformed.height))
         let totalDuration = try await asset.load(.duration)
-        let totalSeconds = CMTimeGetSeconds(totalDuration)
 
         // Usa o frame rate real do vídeo (ex: 60fps de gravação no iPhone)
         // em vez de fixar 30 — senão essa etapa reduziria a fluidez do
@@ -50,7 +49,7 @@ enum CaptionOverlayBuilder {
 
         for cue in cues {
             parentLayer.addSublayer(
-                makeCueLayer(cue: cue, renderSize: renderSize, position: settings.position, totalDuration: totalSeconds)
+                makeCueLayer(cue: cue, renderSize: renderSize, position: settings.position)
             )
         }
 
@@ -78,8 +77,7 @@ enum CaptionOverlayBuilder {
     private static func makeCueLayer(
         cue: CaptionCue,
         renderSize: CGSize,
-        position: CaptionPosition,
-        totalDuration: Double
+        position: CaptionPosition
     ) -> CATextLayer {
         let textLayer = CATextLayer()
         textLayer.string = cue.text
@@ -121,7 +119,18 @@ enum CaptionOverlayBuilder {
         // O padrão "AVCoreAnimationBeginTimeAtZero + tempo absoluto" é o
         // jeito documentado de ancorar uma CAAnimation num instante
         // específico da linha do tempo durante um export offline (não é
-        // relativo a "agora", que não existe fora de reprodução ao vivo).
+        // relativo a "agora", que não existe fora de reprodução ao vivo) —
+        // MAS só funciona de verdade quando a animação é adicionada direto
+        // na camada. Numa primeira versão isso estava embrulhado num
+        // CAAnimationGroup e a legenda simplesmente não aparecia no export
+        // nenhum — casos documentados de AVVideoCompositionCoreAnimationTool
+        // não avaliarem corretamente animações aninhadas num group durante
+        // exportação offline. Duas CABasicAnimation independentes, cada uma
+        // adicionada direto com sua própria chave, é o padrão confirmado
+        // que funciona: a que foi adicionada mais recentemente manda no
+        // valor enquanto estiver "ativa" (dentro da janela + fillMode
+        // .forwards mantendo o valor depois), então "hide" (adicionada
+        // depois) sobrepõe "show" a partir de cue.end.
         textLayer.opacity = 0
 
         let show = CABasicAnimation(keyPath: "opacity")
@@ -131,6 +140,7 @@ enum CaptionOverlayBuilder {
         show.beginTime = AVCoreAnimationBeginTimeAtZero + cue.start
         show.fillMode = .forwards
         show.isRemovedOnCompletion = false
+        textLayer.add(show, forKey: "show")
 
         let hide = CABasicAnimation(keyPath: "opacity")
         hide.fromValue = 1
@@ -139,20 +149,8 @@ enum CaptionOverlayBuilder {
         hide.beginTime = AVCoreAnimationBeginTimeAtZero + cue.end
         hide.fillMode = .forwards
         hide.isRemovedOnCompletion = false
+        textLayer.add(hide, forKey: "hide")
 
-        let group = CAAnimationGroup()
-        group.animations = [show, hide]
-        // Precisa cobrir o vídeo inteiro, não só a janela do cue: com
-        // isRemovedOnCompletion = false e fillMode = .forwards, a
-        // apresentação some ao final da duração do grupo — se o grupo
-        // acabasse logo depois do cue, o export poderia parar de avaliar
-        // as animações antes do fim real do vídeo.
-        group.duration = totalDuration + 1
-        group.beginTime = AVCoreAnimationBeginTimeAtZero
-        group.fillMode = .forwards
-        group.isRemovedOnCompletion = false
-
-        textLayer.add(group, forKey: "visibility")
         return textLayer
     }
 }
