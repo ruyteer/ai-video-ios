@@ -1,0 +1,52 @@
+# Config do XcodeGen — gera o .xcodeproj no CI (xcodegen generate), nunca à
+# mão no Xcode (ver PLANO.md seção 2.3). Não existe Mac nesta máquina de
+# desenvolvimento, então este arquivo é a única "fonte da verdade" da
+# estrutura do projeto — se algo precisa mudar no target/build settings, muda
+# aqui, não num .xcodeproj que nem existe fora do CI.
+
+name: ViralClip
+
+options:
+  # Versão mínima de sintaxe do project.yml que o XcodeGen entende — trava
+  # comportamento pra não variar entre versões do XcodeGen no runner do CI.
+  xcodeVersion: "15.0"
+  deploymentTarget:
+    iOS: "17.0"
+
+# Pacote Swift local com a lógica pura (SilenceDetection etc.), desenvolvido
+# e testado à parte no Windows via `swift test` (ver CLAUDE.md seção 2). O
+# caminho é relativo à raiz do repo, onde este project.yml também vive. Este
+# pacote pode ainda não existir neste worktree no momento em que este
+# project.yml foi escrito — é escrito em paralelo por outro agente — mas o
+# XcodeGen só resolve esse caminho na hora de `xcodegen generate` no CI,
+# quando o merge já tiver acontecido.
+packages:
+  EditorCore:
+    path: EditorCore
+
+targets:
+  ViralClip:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ViralClip
+    dependencies:
+      - package: EditorCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ruyter.viralclip
+        # App SwiftUI puro, sem Storyboard/Info.plist manual — o XcodeGen
+        # gera o Info.plist a partir destas chaves INFOPLIST_KEY_*.
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        # Propositalmente SEM CODE_SIGN_IDENTITY nem DEVELOPMENT_TEAM aqui —
+        # a assinatura de verdade acontece depois, fora do CI, no Sideloadly
+        # do lado do usuário (ver PLANO.md seção 2.2/2.4 e CLAUDE.md seção 7).
+        # O workflow do GitHub Actions builda com
+        # CODE_SIGNING_ALLOWED=NO/CODE_SIGNING_REQUIRED=NO justamente pra não
+        # precisar de nenhuma configuração de assinatura aqui.
